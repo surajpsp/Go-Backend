@@ -1,0 +1,20 @@
+# SQLite database
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# Compiled binary
+/go-backend
+*.exe
+*.out
+
+# Env & secrets
+.env
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
