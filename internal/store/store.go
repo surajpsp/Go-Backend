@@ -10,12 +10,13 @@ var (
 	ErrNotFound          = errors.New("product not found")
 	ErrInsufficientStock = errors.New("insufficient stock")
 	ErrDuplicateSKU      = errors.New("sku already exists")
+	ErrStockOverflow     = errors.New("stock adjustment overflows")
 )
 
 // ListParams carries the optional search filter and pagination window for List.
 type ListParams struct {
 	Search string // matched against name and sku (case-insensitive); empty = no filter
-	Limit  int    // page size
+	Limit  int    // page size; <= 0 returns every matching row
 	Offset int    // rows to skip = (page-1) * limit
 }
 

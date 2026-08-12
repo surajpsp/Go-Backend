@@ -34,6 +34,10 @@ func NewSQLite(path string) (*SQLiteStore, error) {
 	return s, nil
 }
 
+// Close releases the database handle. Calling it on shutdown lets SQLite
+// checkpoint the write-ahead log instead of leaving a -wal file behind.
+func (s *SQLiteStore) Close() error { return s.db.Close() }
+
 func (s *SQLiteStore) migrate() error {
 	_, err := s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS products (
@@ -46,13 +50,20 @@ func (s *SQLiteStore) migrate() error {
 	return err
 }
 
+// likeEscape neutralises the LIKE metacharacters in user input so a search for
+// "%" or "_" matches those literal characters instead of acting as a wildcard.
+// Pairs with the ESCAPE '\' clause below.
+var likeEscape = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
 func (s *SQLiteStore) List(p ListParams) ([]models.Product, int, error) {
 	// Build a shared WHERE clause so the count and the page use the same filter.
 	where, args := "", []any{}
 	if p.Search != "" {
 		// LIKE is case-insensitive for ASCII in SQLite; match name OR sku.
-		where = ` WHERE name LIKE ? OR sku LIKE ?`
-		like := "%" + p.Search + "%"
+		// Parenthesised because AND/OR precedence would otherwise bind a future
+		// added condition only to the sku branch.
+		where = ` WHERE (name LIKE ? ESCAPE '\' OR sku LIKE ? ESCAPE '\')`
+		like := "%" + likeEscape.Replace(p.Search) + "%"
 		args = append(args, like, like)
 	}
 
@@ -62,9 +73,14 @@ func (s *SQLiteStore) List(p ListParams) ([]models.Product, int, error) {
 		return nil, 0, err
 	}
 
-	// Page of rows. Append limit/offset args after the WHERE args.
+	// Page of rows. A Limit of 0 or less means "no window": SQLite treats a
+	// negative LIMIT as unlimited, which keeps this a single query shape.
+	limit := p.Limit
+	if limit <= 0 {
+		limit = -1
+	}
 	q := `SELECT id, name, sku, price, stock_quantity FROM products` + where + ` ORDER BY id LIMIT ? OFFSET ?`
-	rows, err := s.db.Query(q, append(args, p.Limit, p.Offset)...)
+	rows, err := s.db.Query(q, append(args, limit, p.Offset)...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -114,6 +130,12 @@ func (s *SQLiteStore) Create(p models.Product) (models.Product, error) {
 }
 
 // AdjustStock uses a transaction so read-check-write can't race.
+//
+// The returned product is built from the row read inside the transaction plus
+// the quantity this call computed — not from a fresh read afterwards. A second
+// read would happen outside the transaction, so a concurrent adjustment could
+// land in between and the caller would be told a quantity its own request never
+// produced.
 func (s *SQLiteStore) AdjustStock(id, delta int) (models.Product, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -121,8 +143,10 @@ func (s *SQLiteStore) AdjustStock(id, delta int) (models.Product, error) {
 	}
 	defer tx.Rollback()
 
-	var current int
-	err = tx.QueryRow(`SELECT stock_quantity FROM products WHERE id = ?`, id).Scan(&current)
+	var p models.Product
+	err = tx.QueryRow(
+		`SELECT id, name, sku, price, stock_quantity FROM products WHERE id = ?`, id,
+	).Scan(&p.ID, &p.Name, &p.SKU, &p.Price, &p.StockQuantity)
 	if errors.Is(err, sql.ErrNoRows) {
 		return models.Product{}, ErrNotFound
 	}
@@ -130,7 +154,12 @@ func (s *SQLiteStore) AdjustStock(id, delta int) (models.Product, error) {
 		return models.Product{}, err
 	}
 
-	newQty := current + delta
+	newQty := p.StockQuantity + delta
+	// A delta near math.MaxInt wraps to a negative quantity, which the check
+	// below would otherwise report as "insufficient stock" — the wrong reason.
+	if delta > 0 && newQty < p.StockQuantity {
+		return models.Product{}, ErrStockOverflow
+	}
 	if newQty < 0 {
 		return models.Product{}, ErrInsufficientStock
 	}
@@ -141,5 +170,7 @@ func (s *SQLiteStore) AdjustStock(id, delta int) (models.Product, error) {
 	if err := tx.Commit(); err != nil {
 		return models.Product{}, err
 	}
-	return s.Get(id)
+
+	p.StockQuantity = newQty
+	return p, nil
 }

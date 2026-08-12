@@ -120,6 +120,22 @@ func Recovery() gin.HandlerFunc {
 	})
 }
 
+// MaxBodyBytes is the largest request body any endpoint accepts. The bodies
+// here are a handful of small fields, so 1 MiB is generous; the point is that
+// an unbounded body can otherwise be read straight into memory.
+const MaxBodyBytes = 1 << 20
+
+// BodyLimit caps how much of a request body the handlers will read. Exceeding
+// it makes the JSON decode fail, which the handler already reports as a 400.
+func BodyLimit(max int64) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if c.Request.Body != nil {
+			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, max)
+		}
+		c.Next()
+	}
+}
+
 // NotFound handles requests to paths that match no route.
 func NotFound(c *gin.Context) {
 	response.Error(c, http.StatusNotFound, "route_not_found", "the requested endpoint does not exist")

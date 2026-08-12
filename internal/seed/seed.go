@@ -4,7 +4,6 @@ package seed
 import (
 	"errors"
 	"fmt"
-	"log"
 
 	"go-backend/internal/models"
 	"go-backend/internal/store"
@@ -100,11 +99,5 @@ func Run(s store.Store) (int, error) {
 	return inserted, nil
 }
 
-// MustRun runs the seeder and logs the outcome, exiting on failure.
-func MustRun(s store.Store) {
-	n, err := Run(s)
-	if err != nil {
-		log.Fatalf("seed failed: %v", err)
-	}
-	log.Printf("seed: inserted %d product(s), skipped %d already present", n, len(products)-n)
-}
+// Total reports how many products the seed dataset contains.
+func Total() int { return len(products) }
