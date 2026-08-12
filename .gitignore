@@ -4,6 +4,10 @@
 *.db-shm
 *.db-wal
 
+# Logs
+/logs/
+*.log
+
 # Compiled binary
 /go-backend
 *.exe

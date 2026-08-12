@@ -10,16 +10,13 @@ import (
 	"github.com/go-playground/validator/v10"
 
 	"go-backend/internal/models"
+	"go-backend/internal/response"
 	"go-backend/internal/store"
 )
 
 type ProductHandler struct{ store store.Store }
 
 func NewProductHandler(s store.Store) *ProductHandler { return &ProductHandler{store: s} }
-
-func errorResponse(c *gin.Context, status int, code, message string) {
-	c.JSON(status, gin.H{"error": code, "message": message})
-}
 
 // bindMessage turns Gin's binding error into a human-readable message. Field
 // validation errors become e.g. "price must be greater than 0"; a malformed
@@ -75,16 +72,17 @@ func (h *ProductHandler) List(c *gin.Context) {
 		Offset: (page - 1) * limit,
 	})
 	if err != nil {
-		errorResponse(c, http.StatusInternalServerError, "internal_error", "could not fetch products")
+		c.Error(err) // real cause goes to the log, not to the client
+		response.Error(c, http.StatusInternalServerError, "internal_error", "could not fetch products")
 		return
+	}
+	if items == nil {
+		items = []models.Product{} // never send `null` where the client expects a list
 	}
 
 	totalPages := (total + limit - 1) / limit // ceil division
-	c.JSON(http.StatusOK, models.PaginatedProducts{
-		Data: items,
-		Pagination: models.Pagination{
-			Page: page, Limit: limit, Total: total, TotalPages: totalPages,
-		},
+	response.List(c, "products fetched successfully", items, response.Pagination{
+		Page: page, Limit: limit, Total: total, TotalPages: totalPages,
 	})
 }
 
@@ -99,24 +97,25 @@ func atoiDefault(s string, def int) int {
 func (h *ProductHandler) Get(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		errorResponse(c, http.StatusBadRequest, "invalid_id", "id must be a number")
+		response.Error(c, http.StatusBadRequest, "invalid_id", "id must be a number")
 		return
 	}
 	p, err := h.store.Get(id)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
-		errorResponse(c, http.StatusNotFound, "not_found", "product not found")
+		response.Error(c, http.StatusNotFound, "not_found", "product not found")
 	case err != nil:
-		errorResponse(c, http.StatusInternalServerError, "internal_error", "could not fetch product")
+		c.Error(err)
+		response.Error(c, http.StatusInternalServerError, "internal_error", "could not fetch product")
 	default:
-		c.JSON(http.StatusOK, p)
+		response.OK(c, "product fetched successfully", p)
 	}
 }
 
 func (h *ProductHandler) Create(c *gin.Context) {
 	var req models.CreateProductRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errorResponse(c, http.StatusBadRequest, "validation_failed", bindMessage(err))
+		response.Error(c, http.StatusBadRequest, "validation_failed", bindMessage(err))
 		return
 	}
 	p, err := h.store.Create(models.Product{
@@ -124,34 +123,36 @@ func (h *ProductHandler) Create(c *gin.Context) {
 	})
 	switch {
 	case errors.Is(err, store.ErrDuplicateSKU):
-		errorResponse(c, http.StatusConflict, "duplicate_sku", "a product with this sku already exists")
+		response.Error(c, http.StatusConflict, "duplicate_sku", "a product with this sku already exists")
 	case err != nil:
-		errorResponse(c, http.StatusInternalServerError, "internal_error", "could not create product")
+		c.Error(err)
+		response.Error(c, http.StatusInternalServerError, "internal_error", "could not create product")
 	default:
-		c.JSON(http.StatusCreated, p)
+		response.Created(c, "product created successfully", p)
 	}
 }
 
 func (h *ProductHandler) AdjustStock(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		errorResponse(c, http.StatusBadRequest, "invalid_id", "id must be a number")
+		response.Error(c, http.StatusBadRequest, "invalid_id", "id must be a number")
 		return
 	}
 	var req models.AdjustStockRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errorResponse(c, http.StatusBadRequest, "validation_failed", bindMessage(err))
+		response.Error(c, http.StatusBadRequest, "validation_failed", bindMessage(err))
 		return
 	}
 	p, err := h.store.AdjustStock(id, req.Quantity)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
-		errorResponse(c, http.StatusNotFound, "not_found", "product not found")
+		response.Error(c, http.StatusNotFound, "not_found", "product not found")
 	case errors.Is(err, store.ErrInsufficientStock):
-		errorResponse(c, http.StatusConflict, "insufficient_stock", "resulting stock cannot be negative")
+		response.Error(c, http.StatusConflict, "insufficient_stock", "resulting stock cannot be negative")
 	case err != nil:
-		errorResponse(c, http.StatusInternalServerError, "internal_error", "could not adjust stock")
+		c.Error(err)
+		response.Error(c, http.StatusInternalServerError, "internal_error", "could not adjust stock")
 	default:
-		c.JSON(http.StatusOK, p)
+		response.OK(c, "stock updated successfully", p)
 	}
 }

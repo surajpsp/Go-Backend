@@ -18,17 +18,3 @@ type CreateProductRequest struct {
 type AdjustStockRequest struct {
 	Quantity int `json:"quantity" binding:"required"`
 }
-
-// Pagination is the metadata returned alongside a paginated list.
-type Pagination struct {
-	Page       int `json:"page"`
-	Limit      int `json:"limit"`
-	Total      int `json:"total"`      // total rows matching the (optional) search
-	TotalPages int `json:"totalPages"` // ceil(total / limit)
-}
-
-// PaginatedProducts is the response shape for GET /products.
-type PaginatedProducts struct {
-	Data       []Product  `json:"data"`
-	Pagination Pagination `json:"pagination"`
-}
